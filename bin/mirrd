@@ -1,2 +1,9 @@
 #!/usr/bin/env ruby
 # The mirr daemon
+# Daniel Ethridge
+
+require "mirrd"
+include Mirrd
+
+port = ARGV[0].to_i
+init(port)
