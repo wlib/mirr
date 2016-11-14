@@ -14,13 +14,16 @@ Almost as simple as mirr itself:
 ## Usage
 
 mirr add myfolder      :   Add 'myfolder' to sync list
+
 mirr del somefile      :   Remove 'somefile' from sync list
 
 mirr set time 10am     :   Set mirr to sync at 10 am everyday
+
 mirr set every 02:45   :   Set mirr to sync every 2 hours, 45 minutes
 
-mirr sync              :   Sync everything right now
-mirr sync work.rb      :   Only Sync 'work.rb', nothing else changes
+mirr pull              :   Pull everything right now
+
+mirr push work.rb      :   Push only 'work.rb', nothing else changes
 
 ## Contribute
 

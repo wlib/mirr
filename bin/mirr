@@ -2,13 +2,15 @@
 # Mirr - Because you like synchronization
 # Daniel Ethridge
 
-require "mirr"
-include Mirr
+#require "mirr"
+#include Mirr
 
 # 'argv' will be the lowercase version of 'ARGV', this helps for argument matching
 argv = ARGV.map(&:downcase)
 
-help = "\nUsage : `mirr [arguments]` or `mirr [file/directory] [arguments]`
+usage = "Usage : `mirr [arguments]` or `mirr [file/directory] [arguments]`"
+wrong = "Wrong syntax - `mirr -h` can help"
+help = "\n#{usage}
 
 Mirr synchronizes all your work for you. That means you can do dev stuff from your 
 desktop and your laptop. Without having to move your work folder to dropbox or something.
@@ -25,14 +27,94 @@ mirr del somefile      :   Remove 'somefile' from sync list
 mirr set time 10am     :   Set mirr to sync at 10 am everyday
 mirr set every 02:45   :   Set mirr to sync every 2 hours, 45 minutes
 
-mirr sync              :   Sync everything right now
-mirr sync work.rb      :   Only Sync 'work.rb', nothing else changes
+mirr pull              :   Pull everything right now
+mirr push work.rb      :   Push only 'work.rb', nothing else changes
 
 --------------------------------------------------
 
 If you find a bug, want extra features, or have a suggestion,
-make a branch on github : https://github.com/wlib/liste\n\n"
+make a branch on github : https://github.com/wlib/mirr\n\n"
 
-def sync(src, dest)
+def init()
+  puts "Initiating Mirr in #{Dir.home}/.mirr, lists of files will be kept there"
+  unless File.directory?("#{Dir.home}/.mirr")
+    require 'fileutils'
+    FileUtils.mkdir_p("#{Dir.home}/.mirr")
+  end
+  unless File.exist?("#{Dir.home}/.mirr/files.sync")
+    File.open("#{Dir.home}/.mirr/files.sync", "w")
+    puts "Created File sync list"
+  else
+    puts "File sync list already exists, abort"
+    exit
+  end
+end
+
+def add(src)
   
+end
+
+def del(target)
+  
+end
+
+def set_time()
+
+end
+
+def set_every()
+
+end
+
+def pull(targets="all")
+  puts "Pulling #{targets}"
+end
+
+def push(targets="all")
+  puts "Pushing #{targets}"
+end
+
+unless File.directory?("#{Dir.home}/.mirr")
+  require 'fileutils'
+  FileUtils.mkdir_p("#{Dir.home}/.mirr")
+end
+
+case argv[0]
+  when "-h", "--help", "help"
+    puts help
+    exit
+  when "init"
+    init()
+    exit
+  when "add", "--add", "-a", "+"
+    add(ARGV[1])
+    puts "Added #{ARGV[1]} to the sync list"
+    exit
+  when "del", "--del", "-d", "-", "rm"
+    del(ARGV[1])
+    puts "Removed #{ARGV[1]} from sync list"
+    exit
+  when "set", "--set", "-s"
+    if argv.length < 3; puts wrong; exit end
+    case argv[1]
+      when "time"
+        set_time()
+        puts "Now set to sync everything at #{argv[2]} everyday"
+        exit
+      when "every"
+        set_every()
+        puts "Now set to sync every #{argv[2]}"
+        exit
+      else
+        puts wrong
+    end
+  when "pull", "--pull"
+    pull()
+    puts "Pulled"
+  when "push", "--push"
+    push()
+    puts "Pushed"
+  else
+    puts usage
+    exit
 end
