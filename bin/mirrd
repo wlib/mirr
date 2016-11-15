@@ -47,7 +47,7 @@ def unarchive(name, destination)
   tar_extract.close
 end
 
-# Define the server - runs infinitely
+# Define the server - *This code doesn't work right now, it is a placeholder*
 def server()
   server = TCPServer.new(7122)
   while true
