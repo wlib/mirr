@@ -2,8 +2,63 @@
 # The mirr daemon
 # Daniel Ethridge
 
-require "mirrd"
-include Mirrd
+#require "mirrd"
+#include Mirrd
+#require "mirr/version"
+require 'socket'
+require 'rubygems/package'
+require 'fileutils'
+require 'zlib'
 
-port = ARGV[0].to_i
-init(port)
+# Borrowed from Rack for extra compatability
+def daemonize()
+  if RUBY_VERSION < "1.9"
+    exit if fork
+    Process.setsid
+    exit if fork
+    Dir.chdir "/" 
+    STDIN.reopen "/dev/null"
+    STDOUT.reopen "/dev/null", "a" 
+    STDERR.reopen "/dev/null", "a" 
+  else
+    Process.daemon
+  end 
+end
+
+# Arhive tar - This is a function from RubyGems package manager itself
+def archive(name, destination)
+  tar_generate = Gem::Package::TarWriter.new(Zlib::GzipWriter.open(name))
+  tar_generate.rewind
+  tar_generate.each do |entry|
+    # Compressed now
+    destination.write entry.read
+  end
+  tar_generate.close
+end
+
+# Unarchive gzipped tar file
+def unarchive(name, destination)
+  tar_extract = Gem::Package::TarReader.new(Zlib::GzipReader.open(name))
+  tar_extract.rewind
+  tar_extract.each do |entry|
+    # Decompressed now
+    destination.write entry.read
+  end
+  tar_extract.close
+end
+
+# Define the server - runs infinitely
+def server()
+  server = TCPServer.new(7122)
+  while true
+    Thread.new(server.accept) do |client|
+      requestfiles = client.read
+      puts "Client requested #{requestfiles}"
+      client.write requestfiles
+      client.close
+    end
+  end
+end
+
+puts "Starting the server now"
+server()

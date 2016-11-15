@@ -4,12 +4,22 @@
 
 #require "mirr"
 #include Mirr
+#require 'mirr/version'
+require 'socket'
+require 'rubygems/package'
+require 'fileutils'
+require 'zlib'
 
 # 'argv' will be the lowercase version of 'ARGV', this helps for argument matching
 argv = ARGV.map(&:downcase)
-
-usage = "Usage : `mirr [arguments]` or `mirr [file/directory] [arguments]`"
+mdir = "#{Dir.home}/.mirr"
+usage = "Usage : `mirr [arguments]`
+To start the server (necessary to allow other computer to pull from you) run `mirrd`
+`mirr -h` is always there to help"
+littleargs = "You don't have enough arguments, maybe your'e missing something important in your command?"
+bigargs = "Too many arguments"
 wrong = "Wrong syntax - `mirr -h` can help"
+#version = Mirr::VERSION
 help = "\n#{usage}
 
 Mirr synchronizes all your work for you. That means you can do dev stuff from your 
@@ -36,17 +46,19 @@ If you find a bug, want extra features, or have a suggestion,
 make a branch on github : https://github.com/wlib/mirr\n\n"
 
 def init()
-  puts "Initiating Mirr in #{Dir.home}/.mirr, lists of files will be kept there"
-  unless File.directory?("#{Dir.home}/.mirr")
+  puts "Initiating Mirr in #{mdir}, lists of files will be kept there"
+  unless File.directory?("#{mdir}")
     require 'fileutils'
-    FileUtils.mkdir_p("#{Dir.home}/.mirr")
+    FileUtils.mkdir_p("#{mdir}")
   end
-  unless File.exist?("#{Dir.home}/.mirr/files.sync")
-    File.open("#{Dir.home}/.mirr/files.sync", "w")
+  unless File.exist?("#{mdir}/files.sync")
+    File.open("#{mdir}/files.sync", "w")
     puts "Created File sync list"
   else
     puts "File sync list already exists, abort"
     exit
+  end
+  unless File.exist?("#{mdir}/mirr.config")
   end
 end
 
@@ -66,18 +78,34 @@ def set_every()
 
 end
 
-def pull(targets="all")
-  puts "Pulling #{targets}"
+def set_master(ip)
+
 end
 
-def push(targets="all")
-  puts "Pushing #{targets}"
+def fetch(filenames, ip)
+  socket = TCPSocket.new("#{ip}", 7122)
+  socket.write filenames
+  data = socket.read
+  puts data
+  socket.close
+end
+
+def pull(files="all", ip="master")
+  puts "Pulling #{files} from #{ip}"
+  fetch(files, ip)
+  exit
+end
+
+def push(files="all", ip="target")
+  puts "Pushing #{files} to #{ip}"
 end
 
 unless File.directory?("#{Dir.home}/.mirr")
   require 'fileutils'
   FileUtils.mkdir_p("#{Dir.home}/.mirr")
 end
+
+if ARGV.length == 0; puts "Mirr syncs stuff for you, remember how to use it\n#{usage}"; exit end
 
 case argv[0]
   when "-h", "--help", "help"
@@ -87,15 +115,17 @@ case argv[0]
     init()
     exit
   when "add", "--add", "-a", "+"
+    if argv.length < 2; puts littleargs; exit end
     add(ARGV[1])
     puts "Added #{ARGV[1]} to the sync list"
     exit
   when "del", "--del", "-d", "-", "rm"
+    if argv.length < 2; puts littleargs; exit end
     del(ARGV[1])
     puts "Removed #{ARGV[1]} from sync list"
     exit
   when "set", "--set", "-s"
-    if argv.length < 3; puts wrong; exit end
+    if argv.length < 3; puts littleargs; exit end
     case argv[1]
       when "time"
         set_time()
@@ -105,14 +135,24 @@ case argv[0]
         set_every()
         puts "Now set to sync every #{argv[2]}"
         exit
+      when "master"
+        set_master(argv[2])
+        puts "Set #{argv[2]} to be master"
+        exit
       else
         puts wrong
     end
   when "pull", "--pull"
-    pull()
+    if argv.length < 2 ; pull()
+    elsif argv.length == 2; pull(argv[1])
+    elsif argv.length == 3; pull(argv[1], argv[2])
+    else puts bigargs; exit end
     puts "Pulled"
   when "push", "--push"
-    push()
+    if argv.length < 2 ; push()
+    elsif argv.length == 2; push(argv[1])
+    elsif argv.length == 3; push(argv[1], argv[2])
+    else puts bigargs; exit end
     puts "Pushed"
   else
     puts usage
