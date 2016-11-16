@@ -9,6 +9,8 @@ require 'socket'
 require 'rubygems/package'
 require 'fileutils'
 require 'zlib'
+require "pathname"
+require "zip"
 
 # Borrowed from Rack for extra compatability
 def daemonize()
@@ -25,26 +27,16 @@ def daemonize()
   end 
 end
 
-# Arhive tar - This is a function from RubyGems package manager itself
-def archive(name, destination)
-  tar_generate = Gem::Package::TarWriter.new(Zlib::GzipWriter.open(name))
-  tar_generate.rewind
-  tar_generate.each do |entry|
-    # Compressed now
-    destination.write entry.read
+# Zip a directory
+def zipdir(dir)
+  basename = File.basename(dir)
+  zfname = "#{Dir.home}/.mirr/.#{basename}.zip"
+  Zip::File.open(zfname, Zip::File::CREATE) do |zf|
+    Dir[File.join(dir, '**', '**')].each do |file|
+      path = Pathname.new(file)
+      zf.add(path.relative_path_from(dir), file)
+    end
   end
-  tar_generate.close
-end
-
-# Unarchive gzipped tar file
-def unarchive(name, destination)
-  tar_extract = Gem::Package::TarReader.new(Zlib::GzipReader.open(name))
-  tar_extract.rewind
-  tar_extract.each do |entry|
-    # Decompressed now
-    destination.write entry.read
-  end
-  tar_extract.close
 end
 
 # Define the server - *This code doesn't work right now, it is a placeholder*
