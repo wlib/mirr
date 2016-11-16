@@ -82,20 +82,28 @@ def set_master(ip)
 
 end
 
-def fetch(filenames, ip)
+# Unzip into destination/zipfilename
+def unzip(file, dest)
+  Zip::ZipFile.open(file) do |zf|
+   zf.each do |f|
+     out = "#{dest}/#{f.basename}"
+     FileUtils.mkdir_p(out)
+     zf.extract(f, out)
+   end
+  end
+end
+
+# Connect to a server, request a directory/file, and recieve a zipped version
+def pull(filenames="all", ip="master")
   socket = TCPSocket.new("#{ip}", 7122)
   socket.write filenames
   data = socket.read
   puts data
   socket.close
-end
-
-def pull(files="all", ip="master")
-  puts "Pulling #{files} from #{ip}"
-  fetch(files, ip)
   exit
 end
 
+# Push to any computer running the mirr daemon
 def push(files="all", ip="target")
   puts "Pushing #{files} to #{ip}"
 end
