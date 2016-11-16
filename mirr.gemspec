@@ -22,4 +22,6 @@ Gem::Specification.new do |gem|
 
   gem.add_development_dependency "bundler", "~> 1.13"
   gem.add_development_dependency "rake", "~> 10.0"
+  
+  gem.add_runtime_dependency "rubyzip"
 end
