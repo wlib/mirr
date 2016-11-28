@@ -31,9 +31,10 @@ won't have anything to sync if you didn't add anything.
 
 --------------------------------------------------
 
-mirr refresh           :   Refresh the file sync list, do before pushing
+mirr add somefile      :   Add `somefile` to your synclist
+mirr rm one two etc    :   Remove `one`, `two`, and `etc` from your synclist
 
-mirr push work.rb      :   Push only 'work.rb', nothing else changes
+mirr push work.rb      :   Push only `work.rb`, nothing else changes
 mirr push              :   Push everything in your list to listening targets
 
 --------------------------------------------------
@@ -69,78 +70,115 @@ def init(mdir, mset)
   else
     puts "Config file already exists"
   end
+  # Does the path mapping file exist?
+  unless File.exist?("#{mset}/pathmap.yml")
+    File.open("#{mset}/pathmap.yml", "w")
+    puts "Created empty path mapping file"
+  else
+    puts "Path mapping file already exists"
+  end
 end
 
-def add(array, type, synclist)
+def combine(synclist, entries)
   # Serialize the current file for ruby
   syncread = File.read(synclist)
   synchash = YAML::load(syncread)
   # If the file was empty, make synchash an empty hash
-  if ! synchash.is_a?(Hash)
+  unless synchash.is_a?(Hash)
     synchash = {}
-  end
-  entries = {}
-  case type.downcase
-    when "d", "dir", "dirs", "directory", "directories"
-      array.each do |dir|
-        name = File.basename(dir)
-        type = File.ftype(dir)
-        extention = File.extname(dir)
-        modtime = File.mtime(dir).to_s
-        # Merge each directory into `entries`
-        entries.merge!( { dir =>
-          { "name" => name,
-            "type" => type,
-            "extention" => extention,
-            "modtime" => modtime }
-        } )
-      end
-    when "f", "file", "files"
-      array.each do |file|
-        name = File.basename(file)
-        type = File.ftype(file)
-        extention = File.extname(file)
-        modtime = File.mtime(file).to_s
-        checksum = Digest::MD5.file(file).hexdigest
-        # Merge each file into `entries`
-        entries.merge!( { file =>
-          { "name" => name,
-            "type" => type,
-            "extention" => extention,
-            "modtime" => modtime,
-            "checksum" => checksum }
-        } )
-      end
-    else
-      puts "specify in the second argument ['dir'/'file']"
   end
   # Merge the hash of the original list with the new entries
   combination = synchash.merge!(entries)
-  sync = File.open(synclist, "w")
   # Write the new list out
+  sync = File.open(synclist, "w")
   sync.write combination.to_yaml
   sync.close
 end
 
+# Remove duplicate entries under the same ID
+def rm_doubles(synclist)
+  syncread = File.read(synclist)
+  synchash = YAML::load(syncread)
+  unique = synchash.to_a
+  .uniq! { |_, v| v.values_at("path", "modtime", "checksum") }.to_h
+  if unique.empty?; return end
+  # Write the new list out
+  sync = File.open(synclist, "w")
+  sync.write unique.to_yaml
+  sync.close
+end
+
+def add(array, synclist)
+  entries = {}
+  array.each do |fd|
+    # Get absolute path for every file and directory
+    fd = File.expand_path(fd)
+    # ID is a random 5 char string + timestamp
+    id = "#{rand(36**5).to_s(36)}#{Time.now.to_i}"
+    name = File.basename(fd)
+    type = File.ftype(fd)
+    extention = File.extname(fd)
+    modtime = File.mtime(fd).to_i
+    if File.directory?(fd)
+      # Merge each directory into `entries`
+      entries.merge!( { id =>
+        { "path" => fd,
+          "name" => name,
+          "type" => type,
+          "extention" => extention,
+          "modtime" => modtime }
+      } )
+      # Combine the entry with the synclist
+      combine(synclist, entries)
+      # Because it's a directory, recursion is needed to add() all its contents
+      contents = Dir.glob("#{fd}/**/*", File::FNM_DOTMATCH).reject{ |e| File.basename(e) == "." }
+      add(contents, synclist)
+    elsif File.file?(fd)
+      checksum = Digest::MD5.file(fd).hexdigest
+      # Merge each file into `entries`
+      entries.merge!( { id =>
+        { "path" => fd,
+          "name" => name,
+          "type" => type,
+          "extention" => extention,
+          "modtime" => modtime,
+          "checksum" => checksum }
+      } )
+      # Combine the entry with the synclist
+      combine(synclist, entries)
+    else
+      puts "That is neither a file or directory"
+    end
+  end
+  rm_doubles(synclist)
+end
+
 # Remove a file or directory from the sync list
-def del(target, synclist)
-  puts "Removing #{target} from #{synclist}"
+def del(array, synclist)
+  # Serialize the current file for ruby
+  syncread = File.read(synclist)
+  synchash = YAML::load(syncread)
+  array.each do |entry|
+    entry = File.expand_path(entry)
+    if File.file?(entry)
+      # Get the ID of the entry with the same path
+      synchash.select{|key, hash| hash["path"] == entry}.keys.each do |delid|
+        synchash.delete(delid)
+      end
+    elsif File.directory?(entry)
+      # Get the ID of every entry within the directory
+      synchash.select{|key, hash| hash["path"].start_with? entry}.keys.each do |delid|
+        synchash.delete(delid)
+      end
+    end
+  end
+  # Write the new list out
+  sync = File.open(synclist, "w")
+  sync.write synchash.to_yaml
+  sync.close
 end
 
-# Add a contents of a directory or a just file to the sync list
-def refresh(mdir, synclist)
-  Dir.chdir(mdir)
-  # Truncate the sync list so we have a clean file
-  File.open(synclist, "w").close
-  allfiles = Dir.glob("**/*", File::FNM_DOTMATCH).select{ |e| File.file? e }
-  alldirs = Dir.glob("**/*", File::FNM_DOTMATCH).select{ |e| File.directory? e }.reject{ |e| File.basename(e) == "." }
-  # Add an entry for every directory
-  add(alldirs, "dir", synclist)
-  # Add an entry for every file
-  add(allfiles, "file", synclist)
-end
-
-def add_sync(ip, config)
+def add_origin(ip, config)
   puts "Setting origin in #{config} to #{ip}"
 end
 
@@ -192,50 +230,21 @@ case argv[0]
   when "init", "--init"
     init(mdir, mset)
     exit
-  when "set", "--set", "-s"
-    if argv.length < 3; puts littleargs; exit end
-    case argv[1]
-      when "time"
-        set_time(time, "#{mset}/config.yml}")
-        puts "Now set to sync everything at #{argv[2]} everyday"
-        exit
-      when "every"
-        set_every(time, "#{mset}/config.yml}")
-        puts "Now set to sync every #{argv[2]}"
-        exit
-      when "origin"
-        set_origin(argv[2], "#{mset}/config.yml}")
-        puts "Set #{argv[2]} to be origin"
-        exit
-      else
-        puts wrong, "`mirr set [time/every/origin]`"
-        exit
-    end
+  when "origin"
+    set_origin(argv[1], "#{mset}/config.yml}")
+    puts "Set #{argv[1]} to be origin"
+    exit
   when "add", "--add", "-a", "+"
     if argv.length < 2; puts littleargs; exit end
-    fileentries = []
-    direntries = []
-    ARGV[1..-1].each do |entry|
-      if File.file?(entry)
-        puts "Adding #{entry} as a file"
-        fileentries << entry
-      elsif File.directory?(entry)
-        puts "Adding #{entry} as a directory"
-        direntries << entry
-      end
-    end
-    add(fileentries, "file", "#{mset}/synclist.yml")
-    add(direntries, "dir", "#{mset}/synclist.yml")
+    puts "Adding..."
+    add(ARGV[1..-1], "#{mset}/synclist.yml")
+    puts "Successfully added"
     exit
   when "del", "--del", "-d", "-", "rm"
     if argv.length < 2; puts littleargs; exit end
-    del(ARGV[1])
-    puts "Removed #{ARGV[1]} from sync list"
-    exit
-  when "r", "-r", "refresh", "reload"
-    puts "Refreshing the synclist for #{mdir}"
-    refresh(mdir, "#{mset}/synclist.yml")
-    puts "Successfully overwrote all entries"
+    puts "Removing..."
+    del(ARGV[1..-1], "#{mset}/synclist.yml")
+    puts "Successfully removed"
     exit
   when "push", "--push"
     if argv.length < 2 ; push()
