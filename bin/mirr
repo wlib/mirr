@@ -6,15 +6,16 @@
 #include Mirr
 #require 'mirr/version'
 require 'socket'
-require 'rubygems/package'
 require 'fileutils'
 require 'zlib'
+require 'yaml'
+require 'digest'
 
 # 'argv' will be the lowercase version of 'ARGV', this helps for argument matching
 argv = ARGV.map(&:downcase)
-mdir = "#{Dir.home}/.mirr"
+mdir = "#{Dir.home}/Mirr"
+mset = "#{Dir.home}/.config/mirr"
 usage = "Usage : `mirr [arguments]`
-To start the server (necessary to allow other computer to pull from you) run `mirrd`
 `mirr -h` is always there to help"
 littleargs = "You don't have enough arguments, maybe your'e missing something important in your command?"
 bigargs = "Too many arguments"
@@ -26,142 +27,221 @@ Mirr synchronizes all your work for you. That means you can do dev stuff from yo
 desktop and your laptop. Without having to move your work folder to dropbox or something.
 
 You need to set a file or directory if you didn't already. This is because mirr 
-won't have anything to sync if you didn't add anything. The most important thing 
-to know is that there is always as master to mirror/sync/fetch from, or push to.
+won't have anything to sync if you didn't add anything.
 
 --------------------------------------------------
 
-mirr add myfolder      :   Add 'myfolder' to sync list
-mirr del somefile      :   Remove 'somefile' from sync list
+mirr refresh           :   Refresh the file sync list, do before pushing
 
-mirr set time 10am     :   Set mirr to sync at 10 am everyday
-mirr set every 02:45   :   Set mirr to sync every 2 hours, 45 minutes
-
-mirr pull              :   Pull everything right now
 mirr push work.rb      :   Push only 'work.rb', nothing else changes
+mirr push              :   Push everything in your list to listening targets
 
 --------------------------------------------------
 
 If you find a bug, want extra features, or have a suggestion,
 make a branch on github : https://github.com/wlib/mirr\n\n"
 
-def init()
-  puts "Initiating Mirr in #{mdir}, lists of files will be kept there"
-  unless File.directory?("#{mdir}")
+# Initialize mirr (first run)
+def init(mdir, mset)
+  # Does the mirr root directory even exist?
+  unless File.directory?(mdir)
+    puts "Initiating Mirr in #{mdir}, keep your files in there"
     require 'fileutils'
-    FileUtils.mkdir_p("#{mdir}")
+    FileUtils.mkdir_p(mdir)
   end
-  unless File.exist?("#{mdir}/files.sync")
-    File.open("#{mdir}/files.sync", "w")
-    puts "Created File sync list"
+  # Does the mirr settings directory exist?
+  unless File.directory?(mset)
+    puts "Config files are in #{mset}"
+    require 'fileutils'
+    FileUtils.mkdir_p(mset)
+  end
+  # Does the file sync list exist?
+  unless File.exist?("#{mset}/synclist.yml")
+    File.open("#{mset}/synclist.yml", "w")
+    puts "Created empty File sync list"
   else
-    puts "File sync list already exists, abort"
-    exit
+    puts "File sync list already exists"
   end
-  unless File.exist?("#{mdir}/mirr.config")
+  # Does the config file exist?
+  unless File.exist?("#{mset}/config.yml")
+    File.open("#{mset}/config.yml", "w")
+    puts "Created empty config file"
+  else
+    puts "Config file already exists"
   end
 end
 
-def add(src)
-  
+def add(array, type, synclist)
+  # Serialize the current file for ruby
+  syncread = File.read(synclist)
+  synchash = YAML::load(syncread)
+  # If the file was empty, make synchash an empty hash
+  if ! synchash.is_a?(Hash)
+    synchash = {}
+  end
+  entries = {}
+  case type.downcase
+    when "d", "dir", "dirs", "directory", "directories"
+      array.each do |dir|
+        name = File.basename(dir)
+        type = File.ftype(dir)
+        extention = File.extname(dir)
+        modtime = File.mtime(dir).to_s
+        # Merge each directory into `entries`
+        entries.merge!( { dir =>
+          { "name" => name,
+            "type" => type,
+            "extention" => extention,
+            "modtime" => modtime }
+        } )
+      end
+    when "f", "file", "files"
+      array.each do |file|
+        name = File.basename(file)
+        type = File.ftype(file)
+        extention = File.extname(file)
+        modtime = File.mtime(file).to_s
+        checksum = Digest::MD5.file(file).hexdigest
+        # Merge each file into `entries`
+        entries.merge!( { file =>
+          { "name" => name,
+            "type" => type,
+            "extention" => extention,
+            "modtime" => modtime,
+            "checksum" => checksum }
+        } )
+      end
+    else
+      puts "specify in the second argument ['dir'/'file']"
+  end
+  # Merge the hash of the original list with the new entries
+  combination = synchash.merge!(entries)
+  sync = File.open(synclist, "w")
+  # Write the new list out
+  sync.write combination.to_yaml
+  sync.close
 end
 
-def del(target)
-  
+# Remove a file or directory from the sync list
+def del(target, synclist)
+  puts "Removing #{target} from #{synclist}"
 end
 
-def set_time()
-
+# Add a contents of a directory or a just file to the sync list
+def refresh(mdir, synclist)
+  Dir.chdir(mdir)
+  # Truncate the sync list so we have a clean file
+  File.open(synclist, "w").close
+  allfiles = Dir.glob("**/*", File::FNM_DOTMATCH).select{ |e| File.file? e }
+  alldirs = Dir.glob("**/*", File::FNM_DOTMATCH).select{ |e| File.directory? e }.reject{ |e| File.basename(e) == "." }
+  # Add an entry for every directory
+  add(alldirs, "dir", synclist)
+  # Add an entry for every file
+  add(allfiles, "file", synclist)
 end
 
-def set_every()
-
+def add_sync(ip, config)
+  puts "Setting origin in #{config} to #{ip}"
 end
 
-def set_master(ip)
-
+# Zlib to zip up files
+def zip(file, dest)
+  Zlib::GzipWriter.open(dest) do |gz|
+    gz.write IO.binread(file)
+    gz.close
+  end
 end
 
-# Unzip into destination/zipfilename
+# Unzip into a given destination
 def unzip(file, dest)
-  Zip::ZipFile.open(file) do |zf|
-   zf.each do |f|
-     out = "#{dest}/#{f.basename}"
-     FileUtils.mkdir_p(out)
-     zf.extract(f, out)
-   end
+  Zlib::GzipReader.open(file) do |gz|
+    orig = gz.read
+    gz.close
+    out = File.open(dest, "w")
+    out.write orig
+    out.close
   end
 end
 
-# Connect to a server, request a directory/file, and recieve a zipped version
-def pull(filenames="all", ip="master")
-  socket = TCPSocket.new("#{ip}", 7122)
-  socket.write filenames
-  data = socket.read
-  puts data
-  socket.close
-  exit
+# Connect to a server, request a directory/file, and recieve zipped content
+def retrieve(synclist)
 end
 
-# Push to any computer running the mirr daemon
-def push(files="all", ip="target")
-  puts "Pushing #{files} to #{ip}"
+# Push to any computer running mirr already
+def push(files="all")
+  puts "Pushing #{files} to all listening mirr targets"
 end
 
-unless File.directory?("#{Dir.home}/.mirr")
-  require 'fileutils'
-  FileUtils.mkdir_p("#{Dir.home}/.mirr")
+# If not done yet, automatically initialize mirr
+unless File.directory?(mdir)
+  init(mdir, mset)
+end
+# If there is no sync list, initialize mirr again
+unless File.file?("#{mset}/synclist.yml")
+  init(mdir, mset)
 end
 
+# If there are no arguments, display a message to help you remember what the program does
 if ARGV.length == 0; puts "Mirr syncs stuff for you, remember how to use it\n#{usage}"; exit end
 
+# Argument parser determines how exactly mirr should behave
 case argv[0]
-  when "-h", "--help", "help"
+  when "help", "-h", "--help"
     puts help
     exit
-  when "init"
-    init()
+  when "init", "--init"
+    init(mdir, mset)
     exit
+  when "set", "--set", "-s"
+    if argv.length < 3; puts littleargs; exit end
+    case argv[1]
+      when "time"
+        set_time(time, "#{mset}/config.yml}")
+        puts "Now set to sync everything at #{argv[2]} everyday"
+        exit
+      when "every"
+        set_every(time, "#{mset}/config.yml}")
+        puts "Now set to sync every #{argv[2]}"
+        exit
+      when "origin"
+        set_origin(argv[2], "#{mset}/config.yml}")
+        puts "Set #{argv[2]} to be origin"
+        exit
+      else
+        puts wrong, "`mirr set [time/every/origin]`"
+        exit
+    end
   when "add", "--add", "-a", "+"
     if argv.length < 2; puts littleargs; exit end
-    add(ARGV[1])
-    puts "Added #{ARGV[1]} to the sync list"
+    fileentries = []
+    direntries = []
+    ARGV[1..-1].each do |entry|
+      if File.file?(entry)
+        puts "Adding #{entry} as a file"
+        fileentries << entry
+      elsif File.directory?(entry)
+        puts "Adding #{entry} as a directory"
+        direntries << entry
+      end
+    end
+    add(fileentries, "file", "#{mset}/synclist.yml")
+    add(direntries, "dir", "#{mset}/synclist.yml")
     exit
   when "del", "--del", "-d", "-", "rm"
     if argv.length < 2; puts littleargs; exit end
     del(ARGV[1])
     puts "Removed #{ARGV[1]} from sync list"
     exit
-  when "set", "--set", "-s"
-    if argv.length < 3; puts littleargs; exit end
-    case argv[1]
-      when "time"
-        set_time()
-        puts "Now set to sync everything at #{argv[2]} everyday"
-        exit
-      when "every"
-        set_every()
-        puts "Now set to sync every #{argv[2]}"
-        exit
-      when "master"
-        set_master(argv[2])
-        puts "Set #{argv[2]} to be master"
-        exit
-      else
-        puts wrong
-    end
-  when "pull", "--pull"
-    if argv.length < 2 ; pull()
-    elsif argv.length == 2; pull(argv[1])
-    elsif argv.length == 3; pull(argv[1], argv[2])
-    else puts bigargs; exit end
-    puts "Pulled"
+  when "r", "-r", "refresh", "reload"
+    puts "Refreshing the synclist for #{mdir}"
+    refresh(mdir, "#{mset}/synclist.yml")
+    puts "Successfully overwrote all entries"
+    exit
   when "push", "--push"
     if argv.length < 2 ; push()
-    elsif argv.length == 2; push(argv[1])
-    elsif argv.length == 3; push(argv[1], argv[2])
     else puts bigargs; exit end
     puts "Pushed"
+    exit
   else
     puts usage
     exit
