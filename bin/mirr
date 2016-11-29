@@ -13,7 +13,6 @@ require 'digest'
 
 # 'argv' will be the lowercase version of 'ARGV', this helps for argument matching
 argv = ARGV.map(&:downcase)
-mdir = "#{Dir.home}/Mirr"
 mset = "#{Dir.home}/.config/mirr"
 usage = "Usage : `mirr [arguments]`
 `mirr -h` is always there to help"
@@ -43,13 +42,7 @@ If you find a bug, want extra features, or have a suggestion,
 make a branch on github : https://github.com/wlib/mirr\n\n"
 
 # Initialize mirr (first run)
-def init(mdir, mset)
-  # Does the mirr root directory even exist?
-  unless File.directory?(mdir)
-    puts "Initiating Mirr in #{mdir}, keep your files in there"
-    require 'fileutils'
-    FileUtils.mkdir_p(mdir)
-  end
+def init(mset)
   # Does the mirr settings directory exist?
   unless File.directory?(mset)
     puts "Config files are in #{mset}"
@@ -70,112 +63,111 @@ def init(mdir, mset)
   else
     puts "Config file already exists"
   end
-  # Does the path mapping file exist?
-  unless File.exist?("#{mset}/pathmap.yml")
-    File.open("#{mset}/pathmap.yml", "w")
-    puts "Created empty path mapping file"
+end
+
+def writelist(hash, list, overwrite=false)
+  listread = File.read(list)
+  unless listread.empty?
+    listhash = YAML::load(listread)
   else
-    puts "Path mapping file already exists"
+    listhash = {}
   end
-end
-
-def combine(synclist, entries)
-  # Serialize the current file for ruby
-  syncread = File.read(synclist)
-  synchash = YAML::load(syncread)
-  # If the file was empty, make synchash an empty hash
-  unless synchash.is_a?(Hash)
-    synchash = {}
+  if overwrite
+    out = hash
+  # Merge the hash of the original list with the new hash
+  elsif ! overwrite
+    out = listhash.merge!(hash)
   end
-  # Merge the hash of the original list with the new entries
-  combination = synchash.merge!(entries)
   # Write the new list out
-  sync = File.open(synclist, "w")
-  sync.write combination.to_yaml
-  sync.close
+  file = File.open(list, "w")
+  file.write out.to_yaml
+  file.close
 end
 
-# Remove duplicate entries under the same ID
-def rm_doubles(synclist)
-  syncread = File.read(synclist)
-  synchash = YAML::load(syncread)
-  unique = synchash.to_a
-  .uniq! { |_, v| v.values_at("path", "modtime", "checksum") }.to_h
-  if unique.empty?; return end
-  # Write the new list out
-  sync = File.open(synclist, "w")
-  sync.write unique.to_yaml
-  sync.close
-end
-
-def add(array, synclist)
-  entries = {}
-  array.each do |fd|
-    # Get absolute path for every file and directory
-    fd = File.expand_path(fd)
-    # ID is a random 5 char string + timestamp
-    id = "#{rand(36**5).to_s(36)}#{Time.now.to_i}"
-    name = File.basename(fd)
-    type = File.ftype(fd)
-    extention = File.extname(fd)
-    modtime = File.mtime(fd).to_i
-    if File.directory?(fd)
-      # Merge each directory into `entries`
-      entries.merge!( { id =>
-        { "path" => fd,
-          "name" => name,
-          "type" => type,
-          "extention" => extention,
-          "modtime" => modtime }
-      } )
-      # Combine the entry with the synclist
-      combine(synclist, entries)
-      # Because it's a directory, recursion is needed to add() all its contents
-      contents = Dir.glob("#{fd}/**/*", File::FNM_DOTMATCH).reject{ |e| File.basename(e) == "." }
-      add(contents, synclist)
-    elsif File.file?(fd)
-      checksum = Digest::MD5.file(fd).hexdigest
-      # Merge each file into `entries`
-      entries.merge!( { id =>
-        { "path" => fd,
-          "name" => name,
-          "type" => type,
-          "extention" => extention,
-          "modtime" => modtime,
-          "checksum" => checksum }
-      } )
-      # Combine the entry with the synclist
-      combine(synclist, entries)
-    else
-      puts "That is neither a file or directory"
+def loading(fps=10)
+  chars = %w[| / - \\]
+  delay = 1.0/fps
+  iter = 0
+  spinner = Thread.new do
+    while iter do  # Keep spinning until told otherwise
+      print chars[(iter+=1) % chars.length]
+      sleep delay
+      print "\b"
     end
   end
-  rm_doubles(synclist)
+  yield.tap{       # After yielding to the block, save the return value
+    iter = false   # Tell the thread to exit, cleaning up after itself…
+    spinner.join   # …and wait for it to do so.
+  }                # Use the block's return value as the method's
 end
 
-# Remove a file or directory from the sync list
+def add(array, synclist, entries={})
+  # Serialize the current synclist, but if it's empty, fall back to an empty hash
+  syncread = File.read(synclist)
+  unless syncread.empty?
+    synchash = YAML::load(syncread)
+  else
+    synchash = {}
+  end
+  # Explode directories and return a larger, complete array
+  finalarray = []
+  array.each do |ex|
+    # Get the absolute path of each item in the array to make things easier
+    ex = File.expand_path(ex)
+    if File.directory?(ex)
+      finalarray << Dir.glob("#{ex}/**/*", File::FNM_DOTMATCH).select{ |e| File.file?(e) }
+    elsif File.file?(ex)
+      finalarray << ex
+    end
+  end
+  # Flatten the array
+  finalarray = finalarray.flatten
+  # Iterate through the final array to add everything
+  finalarray.each do |fd|
+    # The MD5 checksum is used as a key to identify files
+    md5sum = Digest::MD5.file(fd).hexdigest
+    # Type is almost always a file, but special files differ
+    type = File.ftype(fd)
+    # If there is an entry already with the same MD5 checksum, append the path
+    if synchash[md5sum]
+      paths = synchash[md5sum]["paths"]
+      paths << fd
+    else
+      paths = [fd]
+    end
+    # Merge each file into `entries`
+    entries.merge!( { md5sum =>
+      { "type" => type,
+        "paths" => paths }
+    } )
+  end
+  writelist(entries, synclist)
+end
+
+# Remove a file from the sync list
 def del(array, synclist)
   # Serialize the current file for ruby
   syncread = File.read(synclist)
   synchash = YAML::load(syncread)
   array.each do |entry|
+    # Expand path to make things easier to match
     entry = File.expand_path(entry)
+    # MD5 checksum of the file for selection
+    md5sum = Digest::MD5.file(entry).hexdigest
+    # Select the path of the file and remove it
+    del = synchash[md5sum]["paths"]
+    # Find out if this is one file or a big directory
     if File.file?(entry)
-      # Get the ID of the entry with the same path
-      synchash.select{|key, hash| hash["path"] == entry}.keys.each do |delid|
-        synchash.delete(delid)
+      del.delete(entry)
+      # If the paths key holds an empty array now, remove the file entirely
+      if del.empty?
+        synchash.delete(md5sum)
       end
     elsif File.directory?(entry)
-      # Get the ID of every entry within the directory
-      synchash.select{|key, hash| hash["path"].start_with? entry}.keys.each do |delid|
-        synchash.delete(delid)
-      end
+      puts "dir"
     end
   end
-  # Write the new list out
-  sync = File.open(synclist, "w")
-  sync.write synchash.to_yaml
-  sync.close
+  writelist(synchash, synclist, true)
 end
 
 def add_origin(ip, config)
@@ -201,54 +193,61 @@ def unzip(file, dest)
   end
 end
 
-# Connect to a server, request a directory/file, and recieve zipped content
+# Connect to a server, request a file or set of files, and recieve zipped content
 def retrieve(synclist)
 end
 
-# Push to any computer running mirr already
+# Push to any computer running mirr as a daemon
 def push(files="all")
   puts "Pushing #{files} to all listening mirr targets"
 end
 
-# If not done yet, automatically initialize mirr
-unless File.directory?(mdir)
-  init(mdir, mset)
-end
-# If there is no sync list, initialize mirr again
-unless File.file?("#{mset}/synclist.yml")
-  init(mdir, mset)
+# If a key file is missing, initialize mirr again
+if ! File.file?("#{mset}/synclist.yml")
+  init(mset)
 end
 
 # If there are no arguments, display a message to help you remember what the program does
 if ARGV.length == 0; puts "Mirr syncs stuff for you, remember how to use it\n#{usage}"; exit end
 
-# Argument parser determines how exactly mirr should behave
+# Argument parser determines how exactly mirr should behave in the console
 case argv[0]
-  when "help", "-h", "--help"
+  when "help", "-h", "--help", "h", "?"
     puts help
     exit
   when "init", "--init"
-    init(mdir, mset)
+    init(mset)
     exit
-  when "origin"
-    set_origin(argv[1], "#{mset}/config.yml}")
-    puts "Set #{argv[1]} to be origin"
-    exit
-  when "add", "--add", "-a", "+"
+  when "add", "--add", "-a", "plus", "--plus", "sync", "--sync" "+"
     if argv.length < 2; puts littleargs; exit end
-    puts "Adding..."
-    add(ARGV[1..-1], "#{mset}/synclist.yml")
+    if ARGV[1..-1].empty?
+      puts "You can't have empty arguments"
+      exit
+    end
+    print "Adding..."
+    loading(){
+      add(ARGV[1..-1], "#{mset}/synclist.yml")
+    }
     puts "Successfully added"
     exit
-  when "del", "--del", "-d", "-", "rm"
+  when "rm", "remove", "--remove", "delete", "--delete", "del", "--del", "-d", "-"
     if argv.length < 2; puts littleargs; exit end
-    puts "Removing..."
-    del(ARGV[1..-1], "#{mset}/synclist.yml")
+    if ARGV[1..-1].empty?
+      puts "You can't have empty arguments"
+      exit
+    end
+    print "Removing..."
+    loading(){
+      del(ARGV[1..-1], "#{mset}/synclist.yml")
+    }
     puts "Successfully removed"
     exit
-  when "push", "--push"
-    if argv.length < 2 ; push()
-    else puts bigargs; exit end
+  when "push", "--push", "p", "-p", "publish", "--publish", "deploy", "--deploy"
+    if ARGV[1..-1].empty?
+      puts "You can't have empty arguments"
+      exit
+    end
+    push(ARGV[1..-1])
     puts "Pushed"
     exit
   else
