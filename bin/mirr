@@ -50,12 +50,19 @@ def init(mset)
     require 'fileutils'
     FileUtils.mkdir_p(mset)
   end
-  # Does the file sync list exist?
+  # Does the file list exist?
+  unless File.exist?("#{mset}/filelist.yml")
+    File.open("#{mset}/filelist.yml", "w")
+    puts "Created empty File list"
+  else
+    puts "File list already exists"
+  end
+  # Does the sync list exist?
   unless File.exist?("#{mset}/synclist.yml")
     File.open("#{mset}/synclist.yml", "w")
-    puts "Created empty File sync list"
+    puts "Created empty sync list"
   else
-    puts "File sync list already exists"
+    puts "Sync list already exists"
   end
   # Does the config file exist?
   unless File.exist?("#{mset}/config.yml")
@@ -102,7 +109,17 @@ def loading(fps=10)
   }                # Use the block's return value as the method's
 end
 
-def add(array, synclist, entries={})
+def add(array, addlist, synclist)
+  # Add the given array to the file list
+  filelist = File.read(addlist)
+  unless filelist.empty?
+   flhash = YAML::load(filelist)
+  else
+    flhash = {}
+  end
+  # Change below line to append each item in array
+  flhash["add"] << array
+  writelist(flhash, synclist)
   # Serialize the current synclist, but if it's empty, fall back to an empty hash
   syncread = File.read(synclist)
   unless syncread.empty?
@@ -128,7 +145,7 @@ def add(array, synclist, entries={})
     # If this path is already in the list, skip item
     skip = false
     synchash.each do |key, values|
-      if values["paths"].include?(fd)
+      if values["path"].include?(fd)
         skip = true
       end
     end
@@ -143,58 +160,28 @@ def add(array, synclist, entries={})
     type = File.ftype(fd)
     # A modification time is needed so that we keep track of the latest versions
     modtime = File.mtime(fd).to_i
-    # Other metadata is helpful for various reasons
-    birthtime = File.birthtime(fd).to_i
+    # Size returns the file size in bytes
     size = File.size(fd)
-    # If there is an entry already with the same MD5 checksum, append the path
-    paths = [fd]
-    synchash.each do |key, values|
-      if values["md5sum"].include?(md5sum)
-        paths = values["paths"]
-        paths << fd
-      end
-    end
     # Merge each file into `entries`
     entries.merge!( { id =>
       { "type" => type,
         "size" => size,
-        "birthtime" => birthtime,
         "modtime" => modtime,
         "md5sum" => md5sum,
-        "paths" => paths }
+        "path" => path }
     } )
   end
   # Finally write it out to the synclist
   writelist(entries, synclist)
 end
 
+# Refresh the synclist
+def refresh()
+end
+
 # Remove a file from the sync list
 def del(array, synclist)
-  # Serialize the current file for ruby
-  syncread = File.read(synclist)
-  synchash = YAML::load(syncread)
-  array.each do |delfile|
-    delpath = File.expand_path(delfile)
-    id = synchash.select{|key, hash| hash["paths"] == [delpath] }.keys.join
-    # If id is empty then exit
-    if id.empty?
-      puts "No such path"
-      exit
-    end
-    pathskey = synchash[id]["paths"]
-    # Find out if this is one file or a big directory
-    if File.file?(delpath)
-      pathskey.delete(delpath)
-      # If the `paths` key is empty now, delete the entry
-      if pathskey.empty?
-        synchash.delete(id)
-      end
-    elsif File.directory?(delpath)
-      puts "dir"
-    end
-  end
-  # The last argument, `true` tells writelist() to overwrite
-  writelist(synchash, synclist, true)
+
 end
 
 def add_origin(ip, config)
@@ -245,7 +232,7 @@ case argv[0]
   when "init", "--init"
     init(mset)
     exit
-  when "add", "--add", "-a", "plus", "--plus", "sync", "--sync" "+"
+  when "add", "--add", "-a", "plus", "--plus", "sync", "--sync", "+"
     if argv.length < 2; puts littleargs; exit end
     if ARGV[1..-1].empty?
       puts "You can't have empty arguments"
@@ -253,7 +240,7 @@ case argv[0]
     end
     print "Adding..."
     loading(){
-      add(ARGV[1..-1], "#{mset}/synclist.yml")
+      add(ARGV[1..-1], "#{mset}/filelist.yml", "#{mset}/synclist.yml")
     }
     puts "Successfully added"
     exit
