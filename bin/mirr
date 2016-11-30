@@ -26,23 +26,32 @@ help = "\n#{usage}
 Mirr synchronizes all your work for you. That means you can do dev stuff from your 
 desktop and your laptop. Without having to move your work folder to dropbox or something.
 
-You need to set a file or directory if you didn't already. This is because mirr 
-won't have anything to sync if you didn't add anything.
+Mirr works pretty simply, you can push, pull, and sync files and directories
+with other computers. To get started, the first step is to add a file or directory. 
+This will tell mirr it needs to keep track of it. If at any point you change a file in
+the directory you added, change the directory's path, add or delete files, you will need
+to tell mirr to update/refresh its database.
+
 
 --------------------------------------------------
 
-mirr add somefile      :   Add `somefile` to your synclist
-mirr rm one two etc    :   Remove `one`, `two`, and `etc` from your synclist
+( Local usage )
+mirr add somefile            :   Add `somefile` to your synclist
+mirr rm one two etc          :   Remove `one`, `two`, and `etc` from your synclist
+mirr ignore ./private        :   Skip over every file in the directory "./private" don't share them
 
-mirr push work.rb      :   Push only `work.rb`, nothing else changes
-mirr push              :   Push everything in your list to listening targets
+( Network usage )
+mirr pull 10.0.0.25          :   Pull everything from the computer named 10.0.0.25
+mirr push 10.0.0.34 work.rb  :   Push only `work.rb`, nothing else changes
+mirr push all                :   Push everything in your list to every computer in your config
+mirr sync old-laptop         :   Synchronize everything both you and the computer named `old-laptop` have
 
 --------------------------------------------------
 
 If you find a bug, want extra features, or have a suggestion,
 make a branch on github : https://github.com/wlib/mirr\n\n"
 
-# Initialize mirr (first run)
+# Initialize mirr - on first run or when key settings files are missing
 def init(mset)
   # Does the mirr settings directory exist?
   unless File.directory?(mset)
@@ -73,18 +82,19 @@ def init(mset)
   end
 end
 
+# Write a given hash to a yaml file, either merging the two or overwriting
 def writelist(hash, list, overwrite=false)
-  listread = File.read(list)
-  unless listread.empty?
-    listhash = YAML::load(listread)
+  # Serialize the file if we choose to merge, if the file is empty, just overwrite
+  unless overwrite
+    listread = File.read(list)
+    unless listread.empty?
+      listhash = YAML::load(listread)
+      out = listhash.merge!(hash)
+    else
+      out = hash
+    end
   else
-    listhash = {}
-  end
-  if overwrite
     out = hash
-  # Merge the hash of the original list with the new hash
-  elsif ! overwrite
-    out = listhash.merge!(hash)
   end
   # Write the new list out
   file = File.open(list, "w")
@@ -92,34 +102,36 @@ def writelist(hash, list, overwrite=false)
   file.close
 end
 
+# Loading animations help the user know there isn't a freeze
 def loading(fps=10)
   chars = %w[| / - \\]
   delay = 1.0/fps
-  iter = 0
+  go = true
+  i = 0
   spinner = Thread.new do
-    while iter do  # Keep spinning until told otherwise
-      print chars[(iter+=1) % chars.length]
+    while go do
+      print chars[(i+=1) % chars.length]
       sleep delay
       print "\b"
     end
   end
-  yield.tap{       # After yielding to the block, save the return value
-    iter = false   # Tell the thread to exit, cleaning up after itself…
-    spinner.join   # …and wait for it to do so.
-  }                # Use the block's return value as the method's
+  yield.tap{
+    go = false
+    spinner.join
+  }
 end
 
-def add(array, addlist, synclist)
-  # Add the given array to the file list
-  filelist = File.read(addlist)
-  unless filelist.empty?
-   flhash = YAML::load(filelist)
+# Refresh the synclist
+def refresh(filelist, synclist)
+  # Serialize the current file list, but if it's empty, exit with a warning
+  flread = File.read(filelist)
+  unless flread.empty?
+    flhash = YAML::load(flread)
+    array = flhash["add"]
   else
-    flhash = {}
+    puts "There is no filelist"
+    exit
   end
-  # Change below line to append each item in array
-  flhash["add"] << array
-  writelist(flhash, synclist)
   # Serialize the current synclist, but if it's empty, fall back to an empty hash
   syncread = File.read(synclist)
   unless syncread.empty?
@@ -127,7 +139,7 @@ def add(array, addlist, synclist)
   else
     synchash = {}
   end
-  # Explode directories and return a larger, complete array
+  # Explode directories and return an array of all the files to add
   exarray = []
   array.each do |ex|
     if File.directory?(ex)
@@ -138,27 +150,18 @@ def add(array, addlist, synclist)
   end
   # Flatten the array and remove duplicate entries if they exist
   finalarray = exarray.flatten.uniq
-  # Iterate through the final array to add everything
+  # Iterate through the final array to add everything to `entries`
+  entries = {}
   finalarray.each do |fd|
-    # Get the absolute path of each item in the array to make things easier
+    # Get the absolute path of each item in the array
     fd = File.expand_path(fd)
-    # If this path is already in the list, skip item
-    skip = false
-    synchash.each do |key, values|
-      if values["path"].include?(fd)
-        skip = true
-      end
-    end
-    if skip
-      next
-    end
     # The ID is a 15 char random string
     id = rand(36**15).to_s(36)
-    # The MD5 checksum is used as a key to identify files
+    # The MD5 checksum is used to notify when file changes
     md5sum = Digest::MD5.file(fd).hexdigest
-    # Type is almost always just `file`, but special files differ
+    # File type is almost always just `file`, but special files are different
     type = File.ftype(fd)
-    # A modification time is needed so that we keep track of the latest versions
+    # A modification time is needed so that we keep track of a file's latest version
     modtime = File.mtime(fd).to_i
     # Size returns the file size in bytes
     size = File.size(fd)
@@ -168,24 +171,59 @@ def add(array, addlist, synclist)
         "size" => size,
         "modtime" => modtime,
         "md5sum" => md5sum,
-        "path" => path }
+        "path" => fd }
     } )
   end
   # Finally write it out to the synclist
-  writelist(entries, synclist)
+  writelist(entries, synclist, true)
 end
 
-# Refresh the synclist
-def refresh()
+# Add a file or directory to the file list
+def add(array, filelist, synclist)
+  # Serialize the current file list
+  flread = File.read(filelist)
+  unless flread.empty?
+   flhash = YAML::load(flread)
+  else
+    flhash = {"add" => [], "ignore" => []}
+  end
+  # Expand the path of each item in `array`
+  entries = []
+  array.each do |fd|
+    entries << File.expand_path(fd)
+  end
+  # Append to the `add` array and remove doubles
+  flhash["add"] = (flhash["add"] + entries).uniq
+  # Write out to the file list and then refresh the synclist
+  writelist(flhash, filelist)
+  refresh(filelist, synclist)
 end
 
-# Remove a file from the sync list
-def del(array, synclist)
-
+# Remove a file or directory from the file list
+def del(array, filelist, synclist)
+  # Serialize the current file list
+  flread = File.read(filelist)
+  unless flread.empty?
+   flhash = YAML::load(flread)
+  else
+    puts "No content to delete"
+    exit
+  end
+  # Expand the path of each item in `array`
+  entries = []
+  array.each do |fd|
+    entries << File.expand_path(fd)
+  end
+  # Simply remove entries from the `add` array
+  flhash["add"] = (flhash["add"] - entries)
+  # Write out to the file list and then refresh the synclist
+  writelist(flhash, filelist)
+  refresh(filelist, synclist)
 end
 
-def add_origin(ip, config)
-  puts "Setting origin in #{config} to #{ip}"
+# Add a computer to config
+def addcomputer(ip, name, config)
+  puts "Adding a computer named #{name} located at #{ip}to #{config}"
 end
 
 # Zlib to zip up files
@@ -207,13 +245,14 @@ def unzip(file, dest)
   end
 end
 
-# Connect to a server, request a file or set of files, and recieve zipped content
-def retrieve(synclist)
+# Connect to a server, request a file or set of files
+def pull(synclist, ips)
+  puts "Pulling from #{ips}"
 end
 
 # Push to any computer running mirr as a daemon
-def push(files="all")
-  puts "Pushing #{files} to all listening mirr targets"
+def push(synclist, ips)
+  puts "Pushing to #{ips}"
 end
 
 # If a key file is missing, initialize mirr again
@@ -222,7 +261,10 @@ if ! File.file?("#{mset}/synclist.yml")
 end
 
 # If there are no arguments, display a message to help you remember what the program does
-if ARGV.length == 0; puts "Mirr syncs stuff for you, remember how to use it\n#{usage}"; exit end
+if ARGV.length == 0
+  puts "Mirr syncs stuff for you, remember how to use it\n#{usage}"
+  exit
+end
 
 # Argument parser determines how exactly mirr should behave in the console
 case argv[0]
@@ -234,10 +276,6 @@ case argv[0]
     exit
   when "add", "--add", "-a", "plus", "--plus", "sync", "--sync", "+"
     if argv.length < 2; puts littleargs; exit end
-    if ARGV[1..-1].empty?
-      puts "You can't have empty arguments"
-      exit
-    end
     print "Adding..."
     loading(){
       add(ARGV[1..-1], "#{mset}/filelist.yml", "#{mset}/synclist.yml")
@@ -246,21 +284,23 @@ case argv[0]
     exit
   when "rm", "remove", "--remove", "delete", "--delete", "del", "--del", "-d", "-"
     if argv.length < 2; puts littleargs; exit end
-    if ARGV[1..-1].empty?
-      puts "You can't have empty arguments"
-      exit
-    end
     print "Removing..."
     loading(){
-      del(ARGV[1..-1], "#{mset}/synclist.yml")
+      del(ARGV[1..-1], "#{mset}/filelist.yml", "#{mset}/synclist.yml")
     }
     puts "Successfully removed"
     exit
-  when "push", "--push", "p", "-p", "publish", "--publish", "deploy", "--deploy"
-    if ARGV[1..-1].empty?
-      puts "You can't have empty arguments"
-      exit
+  when "--refresh", "refresh", "reload", "re", "up", "-u", "u", "--update", "update", "updatedb"
+    unless ARGV[1..-1].empty?
+      puts "You can't refresh only one file or directory yet, ignoring extra arguments"
     end
+    print "Refreshing the database..."
+    loading(){
+      refresh("#{mset}/filelist.yml", "#{mset}/synclist.yml")
+    }
+    puts "Successfully refreshed"
+    exit
+  when "push", "--push", "p", "-p", "publish", "--publish", "deploy", "--deploy"
     push(ARGV[1..-1])
     puts "Pushed"
     exit
