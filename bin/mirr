@@ -17,7 +17,6 @@ mset = "#{Dir.home}/.config/mirr"
 usage = "Usage : `mirr [arguments]`
 `mirr -h` is always there to help"
 littleargs = "You don't have enough arguments, maybe your'e missing something important in your command?"
-bigargs = "Too many arguments"
 wrong = "Wrong syntax - `mirr -h` can help"
 #version = Mirr::VERSION
 
@@ -32,13 +31,12 @@ This will tell mirr it needs to keep track of it. If at any point you change a f
 the directory you added, change the directory's path, add or delete files, you will need
 to tell mirr to update/refresh its database.
 
-
 --------------------------------------------------
 
 ( Local usage )
 mirr add somefile            :   Add `somefile` to your synclist
 mirr rm one two etc          :   Remove `one`, `two`, and `etc` from your synclist
-mirr ignore ./private        :   Skip over every file in the directory "./private" don't share them
+mirr ignore ./private        :   Skip over every file in the directory `./private` don't share them
 
 ( Network usage )
 mirr pull 10.0.0.25          :   Pull everything from the computer named 10.0.0.25
