@@ -34,9 +34,10 @@ to tell mirr to update/refresh its database.
 --------------------------------------------------
 
 ( Local usage )
-mirr add somefile            :   Add `somefile` to your synclist
-mirr rm one two etc          :   Remove `one`, `two`, and `etc` from your synclist
-mirr ignore ./private        :   Skip over every file in the directory `./private` don't share them
+mirr add somefile            :   Add `somefile` to your filelist
+mirr rm one two etc          :   Remove `one`, `two`, and `etc` from your filelist
+mirr refresh                 :   Refresh the synclist database after changing a directory
+mirr show filelist           :   Show the filelist entries
 
 ( Network usage )
 mirr pull 10.0.0.25          :   Pull everything from the computer named 10.0.0.25
@@ -192,6 +193,8 @@ def add(array, filelist, synclist)
   end
   # Append to the `add` array and remove doubles
   flhash["add"] = (flhash["add"] + entries).uniq
+  # Remove from the ignore list if it is there
+  flhash["ignore"] = (flhash["ignore"] - entries).uniq
   # Write out to the file list and then refresh the synclist
   writelist(flhash, filelist)
   refresh(filelist, synclist)
@@ -212,11 +215,28 @@ def del(array, filelist, synclist)
   array.each do |fd|
     entries << File.expand_path(fd)
   end
-  # Simply remove entries from the `add` array
-  flhash["add"] = (flhash["add"] - entries)
+  # Decide if we should remove from the `add` array or add to the `ignore` array
+  entries.each do |del|
+    if flhash["add"].include?(del)
+      # Simply remove the unwanted entry from `add`
+      flhash["add"] = (flhash["add"] - [del]).uniq
+    else
+      # Because it isn't in the add list, we have to put it in `ignore`
+      flhash["ignore"] = (flhash["ignore"] + [del]).uniq
+    end
+  end
   # Write out to the file list and then refresh the synclist
   writelist(flhash, filelist)
   refresh(filelist, synclist)
+end
+
+# Show the contents of a settings file
+def show(mset, files=["filelist"])
+  files.each do |file|
+    path = "#{mset}/#{file}.yml"
+    puts "Displaying the contents of #{file} :"
+    puts File.read(path), "\n"
+  end
 end
 
 # Add a computer to config
@@ -298,6 +318,13 @@ case argv[0]
     }
     puts "Successfully refreshed"
     exit
+  when "disp", "--disp", "show", "--show", "display"
+    # If no arguments, show filelist
+    if argv[1..-1].empty?
+      show(mset)
+    else
+      show(mset, argv[1..-1])
+    end
   when "push", "--push", "p", "-p", "publish", "--publish", "deploy", "--deploy"
     push(ARGV[1..-1])
     puts "Pushed"
