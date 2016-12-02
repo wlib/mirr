@@ -21,32 +21,25 @@ wrong = "Wrong syntax - `mirr -h` can help"
 #version = Mirr::VERSION
 
 help = "\n#{usage}
-
 Mirr synchronizes all your work for you. That means you can do dev stuff from your 
 desktop and your laptop. Without having to move your work folder to dropbox or something.
-
 Mirr works pretty simply, you can push, pull, and sync files and directories
 with other computers. To get started, the first step is to add a file or directory. 
 This will tell mirr it needs to keep track of it. If at any point you change a file in
 the directory you added, change the directory's path, add or delete files, you will need
 to tell mirr to update/refresh its database.
-
 --------------------------------------------------
-
 ( Local usage )
 mirr add somefile            :   Add `somefile` to your filelist
 mirr rm one two etc          :   Remove `one`, `two`, and `etc` from your filelist
 mirr refresh                 :   Refresh the synclist database after changing a directory
 mirr show filelist           :   Show the filelist entries
-
 ( Network usage )
 mirr pull 10.0.0.25          :   Pull everything from the computer named 10.0.0.25
 mirr push 10.0.0.34 work.rb  :   Push only `work.rb`, nothing else changes
 mirr push all                :   Push everything in your list to every computer in your config
 mirr sync old-laptop         :   Synchronize everything both you and the computer named `old-laptop` have
-
 --------------------------------------------------
-
 If you find a bug, want extra features, or have a suggestion,
 make a branch on github : https://github.com/wlib/mirr\n\n"
 
@@ -120,13 +113,26 @@ def loading(fps=10)
   }
 end
 
+def explodedir(array)
+  exarray = []
+  array.each do |ex|
+    if File.directory?(ex)
+      exarray << Dir.glob("#{ex}/**/*", File::FNM_DOTMATCH).select{ |e| File.file?(e) }
+    elsif File.file?(ex)
+      exarray << ex
+    end
+  end
+  return exarray.flatten.uniq
+end
+
 # Refresh the synclist
 def refresh(filelist, synclist)
   # Serialize the current file list, but if it's empty, exit with a warning
   flread = File.read(filelist)
   unless flread.empty?
     flhash = YAML::load(flread)
-    array = flhash["add"]
+    addarray = flhash["add"]
+    ignorearray = flhash["ignore"]
   else
     puts "There is no filelist"
     exit
@@ -138,17 +144,8 @@ def refresh(filelist, synclist)
   else
     synchash = {}
   end
-  # Explode directories and return an array of all the files to add
-  exarray = []
-  array.each do |ex|
-    if File.directory?(ex)
-      exarray << Dir.glob("#{ex}/**/*", File::FNM_DOTMATCH).select{ |e| File.file?(e) }
-    elsif File.file?(ex)
-      exarray << ex
-    end
-  end
-  # Flatten the array and remove duplicate entries if they exist
-  finalarray = exarray.flatten.uniq
+  # Explode add directories and remove items in the ignore array
+  finalarray = explodedir(addarray) - explodedir(ignorearray)
   # Iterate through the final array to add everything to `entries`
   entries = {}
   finalarray.each do |fd|
@@ -188,12 +185,10 @@ def add(array, filelist, synclist)
   end
   # Expand the path of each item in `array`
   entries = []
-  array.each do |fd|
-    entries << File.expand_path(fd)
-  end
+  array.each{ |fd| entries << File.expand_path(fd) }
   # Append to the `add` array and remove doubles
   flhash["add"] = (flhash["add"] + entries).uniq
-  # Remove from the ignore list if it is there
+  # Remove from the ignore list if the entry is there
   flhash["ignore"] = (flhash["ignore"] - entries).uniq
   # Write out to the file list and then refresh the synclist
   writelist(flhash, filelist)
@@ -212,9 +207,7 @@ def del(array, filelist, synclist)
   end
   # Expand the path of each item in `array`
   entries = []
-  array.each do |fd|
-    entries << File.expand_path(fd)
-  end
+  array.each{ |fd| entries << File.expand_path(fd) }
   # Decide if we should remove from the `add` array or add to the `ignore` array
   entries.each do |del|
     if flhash["add"].include?(del)
@@ -234,8 +227,13 @@ end
 def show(mset, files=["filelist"])
   files.each do |file|
     path = "#{mset}/#{file}.yml"
-    puts "Displaying the contents of #{file} :"
-    puts File.read(path), "\n"
+    content = File.read(path)
+    if content.empty?
+      puts "#{file} appears to be empty"
+    else
+      puts "Displaying the contents of #{file} :"
+      puts content, "\n"
+    end
   end
 end
 
