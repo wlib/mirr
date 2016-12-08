@@ -20,6 +20,8 @@ Gem::Specification.new do |gem|
   gem.executables   = ["mirr"]
   gem.require_paths = ["lib"]
 
+  gem.add_dependency "thor", "~> 0"
+
   gem.add_development_dependency "bundler", "~> 1.13"
   gem.add_development_dependency "rake", "~> 10.0"
   

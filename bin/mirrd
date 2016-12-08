@@ -1,0 +1,35 @@
+#!/usr/bin/env ruby
+# Mirrd - The mirr daemon
+# Daniel Ethridge
+
+#require "mirr"
+#include Mirr
+#require 'mirr/version'
+require 'socket'
+require 'fileutils'
+require 'zlib'
+require 'yaml'
+require 'digest'
+
+def listen()
+  server = TCPServer.open(3122)
+  while true
+    Thread.start(server.accept) do |client|
+    ip = client.peeraddr[3]
+      info = client.gets.chomp
+      case info
+        when "PULLING"
+          client.puts "PUSHING"
+          push(ip)
+        when "PUSHING"
+          client.puts "PULLING"
+          pull(ip)
+        else
+          client.puts "FAIL"
+          client.close
+      end
+    end
+  end
+end
+
+listen()
